@@ -16,22 +16,45 @@ export default function AdminDashboard() {
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<"all" | "used" | "unused">("all");
   const [newKey, setNewKey] = useState("");
-  const [q, setQ] = useState("");        // 🔍 từ khoá tìm kiếm (license/email)
+  const [q, setQ] = useState(""); // tìm kiếm license/email
 
-  // Tải dữ liệu
-  useEffect(() => { fetchLicenses(); fetchLogs(); }, []);
+  // 🧩 Load dữ liệu ban đầu
+  useEffect(() => {
+    fetchLicenses();
+    fetchLogs();
 
+    // ✅ Realtime update: khi có thay đổi trong Supabase
+    const channel = supabase
+      .channel("license-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "licenses" },
+        (payload) => {
+          console.log("🔄 Realtime:", payload);
+          fetchLicenses();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // 📦 Lấy danh sách license
   async function fetchLicenses() {
     setLoading(true);
     const { data, error } = await supabase
       .from("licenses")
       .select("*")
       .order("created_at", { ascending: false });
+
     if (error) console.error("❌ Lỗi tải license:", error);
     else setLicenses(data || []);
     setLoading(false);
   }
 
+  // 🕓 Lấy log hoạt động
   async function fetchLogs() {
     const { data, error } = await supabase
       .from("license_logs")
@@ -42,18 +65,26 @@ export default function AdminDashboard() {
     else setLogs(data || []);
   }
 
-  // Sinh key
+  // 🧠 Sinh key ngẫu nhiên
   function generateKey() {
     const rand = Math.random().toString(36).substring(2, 10).toUpperCase();
     setNewKey(`HAISOFT-${rand}-${new Date().getFullYear()}`);
   }
 
-  // Tạo license
+  // ➕ Tạo license mới
   async function createLicense() {
     if (!newKey) return alert("⚠️ Hãy sinh hoặc nhập license trước khi tạo.");
     setBusy(true);
     const { error } = await supabase.from("licenses").insert([
-      { license_key: newKey, duration_days: 365, is_used: false },
+      {
+        license_key: newKey,
+        duration_days: 30,
+        is_used: false,
+        email: null,
+        activated_by_user_id: null,
+        activated_at: null,
+        expires_at: null,
+      },
     ]);
     setBusy(false);
     if (error) return alert("❌ Lỗi khi tạo license.");
@@ -62,33 +93,41 @@ export default function AdminDashboard() {
     fetchLicenses();
   }
 
-  // Ghi log
+  // 🪵 Ghi log
   async function addLog(action: string, message: string) {
     await supabase.from("license_logs").insert([{ action, message }]);
   }
 
-  // Gia hạn
+  // ⏰ Gia hạn 30 ngày
   async function extendLicense(id: string, key: string) {
     setBusy(true);
-    const { error } = await supabase.rpc("extend_license_30days", { license_id: id });
+    const { error } = await supabase.rpc("extend_license_30days", {
+      license_id: id,
+    });
     setBusy(false);
-    if (error) { console.error(error); return alert("⚠️ Lỗi khi gia hạn license."); }
+    if (error) {
+      console.error(error);
+      return alert("⚠️ Lỗi khi gia hạn license (RPC cần được tạo).");
+    }
     await addLog("extend", `Gia hạn 30 ngày cho key: ${key}`);
     fetchLicenses();
   }
 
-  // Xoá
+  // 🗑️ Xoá license
   async function deleteLicense(id: string, key: string) {
     if (!confirm(`Xoá license "${key}"?`)) return;
     setBusy(true);
     const { error } = await supabase.from("licenses").delete().eq("id", id);
     setBusy(false);
-    if (error) { console.error(error); return alert("⚠️ Lỗi khi xoá license."); }
+    if (error) {
+      console.error(error);
+      return alert("⚠️ Lỗi khi xoá license.");
+    }
     await addLog("delete", `Xoá license: ${key}`);
     fetchLicenses();
   }
 
-  // 🔍 Lọc + Tìm kiếm (memo hoá cho mượt)
+  // 🔍 Lọc và tìm kiếm
   const filteredLicenses = useMemo(() => {
     const kw = q.trim().toLowerCase();
     return licenses
@@ -105,7 +144,7 @@ export default function AdminDashboard() {
       });
   }, [licenses, filter, q]);
 
-  // 📊 Thống kê
+  // 📊 Thống kê tổng quan
   const countUsed = licenses.filter((l) => l.is_used).length;
   const countUnused = licenses.filter((l) => !l.is_used).length;
   const countExpired = licenses.filter(
@@ -118,10 +157,9 @@ export default function AdminDashboard() {
     { name: "Hết hạn", value: countExpired },
   ];
 
-  // Export CSV
+  // 📤 Xuất CSV
   function handleExport() {
     if (!filteredLicenses.length) return alert("Không có dữ liệu để xuất.");
-    // chọn các cột quan trọng
     const rows = filteredLicenses.map((l) => ({
       license: l.license_key,
       email: l.email ?? "",
@@ -135,7 +173,6 @@ export default function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-[#111] text-gray-200 font-[Inter] p-6">
-      {/* Busy overlay */}
       {busy && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
           <div className="bg-[#1b1b1b] border border-[#333] px-6 py-4 rounded-xl">
@@ -148,7 +185,7 @@ export default function AdminDashboard() {
         {/* Header */}
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold text-red-500 flex items-center gap-2">
-            <FaChartBar /> Hải Soft Admin Dashboard v7
+            <FaChartBar /> Hải Soft License Manager v8
           </h1>
           <div className="flex gap-2">
             <button
@@ -169,13 +206,21 @@ export default function AdminDashboard() {
         {/* Tabs */}
         <div className="flex gap-3 mb-6">
           <button
-            className={`px-3 py-1 rounded ${tab==="dashboard" ? "bg-red-700 text-white" : "bg-gray-700 text-gray-300"}`}
+            className={`px-3 py-1 rounded ${
+              tab === "dashboard"
+                ? "bg-red-700 text-white"
+                : "bg-gray-700 text-gray-300"
+            }`}
             onClick={() => setTab("dashboard")}
           >
             📊 Dashboard
           </button>
           <button
-            className={`px-3 py-1 rounded ${tab==="logs" ? "bg-red-700 text-white" : "bg-gray-700 text-gray-300"}`}
+            className={`px-3 py-1 rounded ${
+              tab === "logs"
+                ? "bg-red-700 text-white"
+                : "bg-gray-700 text-gray-300"
+            }`}
             onClick={() => setTab("logs")}
           >
             <FaHistory className="inline mr-1" /> Logs
@@ -184,7 +229,7 @@ export default function AdminDashboard() {
 
         {tab === "dashboard" && (
           <>
-            {/* Hàng công cụ: tìm kiếm + tạo */}
+            {/* Toolbar */}
             <div className="flex flex-col md:flex-row gap-2 md:items-center mb-6">
               <div className="relative flex-1">
                 <FaSearch className="absolute left-3 top-3 text-gray-500" />
@@ -222,26 +267,38 @@ export default function AdminDashboard() {
             {/* Bộ lọc */}
             <div className="flex gap-3 mb-6">
               <button
-                className={`px-3 py-1 rounded ${filter==="all" ? "bg-red-700 text-white" : "bg-gray-700 text-gray-300"}`}
+                className={`px-3 py-1 rounded ${
+                  filter === "all"
+                    ? "bg-red-700 text-white"
+                    : "bg-gray-700 text-gray-300"
+                }`}
                 onClick={() => setFilter("all")}
               >
                 Tất cả
               </button>
               <button
-                className={`px-3 py-1 rounded ${filter==="used" ? "bg-red-700 text-white" : "bg-gray-700 text-gray-300"}`}
+                className={`px-3 py-1 rounded ${
+                  filter === "used"
+                    ? "bg-red-700 text-white"
+                    : "bg-gray-700 text-gray-300"
+                }`}
                 onClick={() => setFilter("used")}
               >
                 Đã kích hoạt
               </button>
               <button
-                className={`px-3 py-1 rounded ${filter==="unused" ? "bg-red-700 text-white" : "bg-gray-700 text-gray-300"}`}
+                className={`px-3 py-1 rounded ${
+                  filter === "unused"
+                    ? "bg-red-700 text-white"
+                    : "bg-gray-700 text-gray-300"
+                }`}
                 onClick={() => setFilter("unused")}
               >
                 Chưa kích hoạt
               </button>
             </div>
 
-            {/* Thống kê + biểu đồ */}
+            {/* Thống kê */}
             <div className="mb-8">
               <h2 className="text-lg mb-2 text-gray-300 font-semibold">
                 📈 Thống kê tổng quan ({licenses.length} license)
@@ -251,13 +308,23 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#333" />
                   <XAxis dataKey="name" stroke="#aaa" />
                   <YAxis stroke="#aaa" />
-                  <Tooltip contentStyle={{ backgroundColor: "#222", border: "1px solid #444" }} />
-                  <Bar dataKey="value" fill="#ef4444" barSize={50} radius={[6,6,0,0]} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#222",
+                      border: "1px solid #444",
+                    }}
+                  />
+                  <Bar
+                    dataKey="value"
+                    fill="#ef4444"
+                    barSize={50}
+                    radius={[6, 6, 0, 0]}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>
 
-            {/* Bảng */}
+            {/* Bảng dữ liệu */}
             {loading ? (
               <p>🔄 Đang tải dữ liệu...</p>
             ) : (
@@ -273,11 +340,24 @@ export default function AdminDashboard() {
                 </thead>
                 <tbody>
                   {filteredLicenses.map((l) => (
-                    <tr key={l.id} className="border-b border-[#222] hover:bg-[#1f1f1f] transition">
+                    <tr
+                      key={l.id}
+                      className="border-b border-[#222] hover:bg-[#1f1f1f] transition"
+                    >
                       <td className="py-2">{l.license_key}</td>
                       <td>{l.email || "—"}</td>
-                      <td>{l.is_used ? <span className="text-green-400">Đã dùng</span> : <span className="text-gray-400">Chưa dùng</span>}</td>
-                      <td>{l.expires_at ? new Date(l.expires_at).toLocaleDateString() : "—"}</td>
+                      <td>
+                        {l.is_used ? (
+                          <span className="text-green-400">Đã dùng</span>
+                        ) : (
+                          <span className="text-gray-400">Chưa dùng</span>
+                        )}
+                      </td>
+                      <td>
+                        {l.expires_at
+                          ? new Date(l.expires_at).toLocaleDateString()
+                          : "—"}
+                      </td>
                       <td className="flex gap-2 text-sm">
                         <button
                           onClick={() => extendLicense(l.id, l.license_key)}
@@ -315,12 +395,20 @@ export default function AdminDashboard() {
             </h2>
             <div className="bg-[#111] rounded-xl border border-[#333] p-4 max-h-[480px] overflow-y-auto">
               {logs.length === 0 ? (
-                <p className="text-gray-400 text-center py-4">Chưa có log nào.</p>
+                <p className="text-gray-400 text-center py-4">
+                  Chưa có log nào.
+                </p>
               ) : (
                 <ul className="space-y-2 text-sm">
                   {logs.map((log) => (
-                    <li key={log.id} className="border-b border-[#222] pb-2 text-gray-300">
-                      <span className="text-red-500 font-semibold">[{log.action}]</span> {log.message}
+                    <li
+                      key={log.id}
+                      className="border-b border-[#222] pb-2 text-gray-300"
+                    >
+                      <span className="text-red-500 font-semibold">
+                        [{log.action}]
+                      </span>{" "}
+                      {log.message}
                       <br />
                       <span className="text-xs text-gray-500">
                         {new Date(log.created_at).toLocaleString()}
