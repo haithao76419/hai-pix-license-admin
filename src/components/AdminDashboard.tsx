@@ -32,19 +32,29 @@ export default function AdminDashboard() {
   const [agency, setAgency] = useState<string>("");
   const [daiLyList, setDaiLyList] = useState<string[]>([]);
 
-  // 🧩 Load dữ liệu ban đầu
-  useEffect(() => {
-    fetchLicenses();
-    fetchLogs();
-    fetchStats();
+  // 🧩 Load dữ liệu ban đầu (đã fix async cho Vercel)
+useEffect(() => {
+  const initData = async () => {
+    await fetchLicenses();
+    await fetchLogs();
+    await fetchStats();
+  };
+  initData();
 
-    const channel = supabase
-      .channel("license-changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "licenses" }, fetchLicenses)
-      .subscribe();
+  const channel = supabase
+    .channel("license-changes")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "licenses" },
+      () => fetchLicenses()
+    )
+    .subscribe();
 
-    return () => supabase.removeChannel(channel);
-  }, []);
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, []);
+
 
   async function fetchStats() {
     const [tk, soon, exp] = await Promise.all([
