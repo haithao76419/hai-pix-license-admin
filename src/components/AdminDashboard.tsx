@@ -1,18 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import {
-  FaPlus, FaTrash, FaSync, FaClock, FaHistory, FaChartBar, FaDownload, FaSearch, FaUsers,
+  FaPlus,
+  FaTrash,
+  FaSync,
+  FaClock,
+  FaHistory,
+  FaChartBar,
+  FaDownload,
+  FaUsers,
 } from "react-icons/fa";
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
 } from "recharts";
 import { exportCSV } from "../utils/exportCSV";
 import {
   getThongKeDaiLy,
-  getTongKho,
   getLicenseExpiringSoon,
   getLicenseExpired,
-  getKhoDaiLy,
 } from "../lib/views";
 
 export default function AdminDashboard() {
@@ -25,36 +36,37 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
-  const [filter, setFilter] = useState<"all" | "used" | "unused" | "expiring" | "expired">("all");
+  const [filter, setFilter] = useState<
+    "all" | "used" | "unused" | "expiring" | "expired"
+  >("all");
   const [newKey, setNewKey] = useState("");
   const [bulkCount, setBulkCount] = useState<number>(5);
   const [duration, setDuration] = useState<number>(30);
   const [agency, setAgency] = useState<string>("");
   const [daiLyList, setDaiLyList] = useState<string[]>([]);
 
-  // 🧩 Load dữ liệu ban đầu (đã fix async cho Vercel)
-useEffect(() => {
-  const initData = async () => {
-    await fetchLicenses();
-    await fetchLogs();
-    await fetchStats();
-  };
-  initData();
+  // 🧩 Khởi tạo dữ liệu ban đầu
+  useEffect(() => {
+    const init = async () => {
+      await fetchLicenses();
+      await fetchLogs();
+      await fetchStats();
+    };
+    init();
 
-  const channel = supabase
-    .channel("license-changes")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "licenses" },
-      () => fetchLicenses()
-    )
-    .subscribe();
+    const channel = supabase
+      .channel("license-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "licenses" },
+        () => fetchLicenses()
+      )
+      .subscribe();
 
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}, []);
-
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   async function fetchStats() {
     const [tk, soon, exp] = await Promise.all([
@@ -89,14 +101,19 @@ useEffect(() => {
     setLogs(data || []);
   }
 
-  function generateKey() {
-    const rand = Math.random().toString(36).substring(2, 10).toUpperCase();
-    setNewKey(`HAISOFT-${rand}-${new Date().getFullYear()}`);
+  // 🧠 Sinh key ngẫu nhiên
+  function generateLicenseKey() {
+    const prefix = "HAISOFT";
+    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const year = new Date().getFullYear();
+    return `${prefix}-${random}-${year}`;
   }
 
+  // ➕ Tạo key đơn
   async function createLicense() {
     if (!newKey) return alert("⚠️ Hãy sinh hoặc nhập license trước khi tạo.");
     setBusy(true);
+
     const { error } = await supabase.from("licenses").insert([
       {
         license_key: newKey,
@@ -104,43 +121,66 @@ useEffect(() => {
         is_used: false,
         email: null,
         expires_at: null,
-        dai_ly: agency || null,
+        dai_ly_id: agency || null, // ✅ fix đúng cột
       },
     ]);
+
     setBusy(false);
-    if (error) return alert("❌ Lỗi khi tạo license.");
+    if (error) {
+      console.error("❌ Lỗi khi tạo license:", error);
+      alert("❌ Lỗi khi tạo license: " + error.message);
+      return;
+    }
+
     await addLog("create", `Tạo license mới: ${newKey}`);
+    alert("✅ Tạo license thành công!");
     setNewKey("");
     fetchLicenses();
   }
 
+  // 🔁 Tạo hàng loạt
   async function createBulk() {
     if (bulkCount < 1) return alert("⚠️ Nhập số lượng > 0");
     setBusy(true);
     const batch = [];
+
     for (let i = 0; i < bulkCount; i++) {
-      const rand = Math.random().toString(36).substring(2, 10).toUpperCase();
+      const randKey = generateLicenseKey();
       batch.push({
-        license_key: `HAISOFT-${rand}-${new Date().getFullYear()}`,
+        license_key: randKey,
         duration_days: duration,
         is_used: false,
-        dai_ly: agency || null,
+        dai_ly_id: agency || null, // ✅ fix đúng cột
       });
     }
+
     const { error } = await supabase.from("licenses").insert(batch);
     setBusy(false);
-    if (error) return alert("❌ Lỗi khi tạo hàng loạt license.");
-    await addLog("bulk_create", `Tạo ${bulkCount} license mới cho ${agency || "hệ thống"}`);
+
+    if (error) {
+      console.error("❌ Lỗi khi tạo hàng loạt:", error);
+      alert("❌ Lỗi khi tạo hàng loạt license: " + error.message);
+      return;
+    }
+
+    await addLog(
+      "bulk_create",
+      `Tạo ${bulkCount} license mới cho ${agency || "hệ thống"}`
+    );
+    alert(`✅ Đã tạo ${bulkCount} license mới!`);
     fetchLicenses();
   }
 
+  // 🧾 Ghi log
   async function addLog(action: string, message: string) {
     await supabase.from("license_logs").insert([{ action, message }]);
   }
 
   async function extendLicense(id: string, key: string) {
     setBusy(true);
-    const { error } = await supabase.rpc("extend_license_30days", { license_id: id });
+    const { error } = await supabase.rpc("extend_license_30days", {
+      license_id: id,
+    });
     setBusy(false);
     if (error) return alert("⚠️ RPC extend_license_30days chưa sẵn sàng.");
     await addLog("extend", `Gia hạn 30 ngày cho key: ${key}`);
@@ -163,8 +203,10 @@ useEffect(() => {
       .filter((l) => {
         if (filter === "used") return l.is_used;
         if (filter === "unused") return !l.is_used;
-        if (filter === "expiring") return expSoon.some((e) => e.license_key === l.license_key);
-        if (filter === "expired") return expired.some((e) => e.license_key === l.license_key);
+        if (filter === "expiring")
+          return expSoon.some((e) => e.license_key === l.license_key);
+        if (filter === "expired")
+          return expired.some((e) => e.license_key === l.license_key);
         return true;
       })
       .filter((l) => {
@@ -172,7 +214,7 @@ useEffect(() => {
         return (
           (l.license_key || "").toLowerCase().includes(kw) ||
           (l.email || "").toLowerCase().includes(kw) ||
-          (l.dai_ly || "").toLowerCase().includes(kw)
+          (l.dai_ly_id || "").toLowerCase().includes(kw)
         );
       });
   }, [licenses, filter, q, expSoon, expired]);
@@ -193,7 +235,7 @@ useEffect(() => {
     if (!filteredLicenses.length) return alert("Không có dữ liệu để xuất.");
     const rows = filteredLicenses.map((l) => ({
       license: l.license_key,
-      dai_ly: l.dai_ly ?? "",
+      dai_ly: l.dai_ly_id ?? "",
       email: l.email ?? "",
       is_used: l.is_used ? "Đã dùng" : "Chưa dùng",
       expires_at: l.expires_at ?? "",
@@ -214,7 +256,7 @@ useEffect(() => {
       <div className="max-w-7xl mx-auto bg-[#1b1b1b] rounded-2xl p-6 shadow-xl border border-[#222]">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold text-red-500 flex items-center gap-2">
-            <FaChartBar /> Hải Soft License Manager v11.3
+            <FaChartBar /> Hải Soft License Manager v11.4
           </h1>
           <div className="flex gap-2">
             <button
@@ -236,19 +278,31 @@ useEffect(() => {
         <div className="flex gap-3 mb-6">
           <button
             onClick={() => setTab("dashboard")}
-            className={`px-3 py-1 rounded ${tab === "dashboard" ? "bg-red-700 text-white" : "bg-gray-700 text-gray-300"}`}
+            className={`px-3 py-1 rounded ${
+              tab === "dashboard"
+                ? "bg-red-700 text-white"
+                : "bg-gray-700 text-gray-300"
+            }`}
           >
             📊 Dashboard
           </button>
           <button
             onClick={() => setTab("dai_ly")}
-            className={`px-3 py-1 rounded ${tab === "dai_ly" ? "bg-red-700 text-white" : "bg-gray-700 text-gray-300"}`}
+            className={`px-3 py-1 rounded ${
+              tab === "dai_ly"
+                ? "bg-red-700 text-white"
+                : "bg-gray-700 text-gray-300"
+            }`}
           >
             <FaUsers className="inline mr-1" /> Đại lý
           </button>
           <button
             onClick={() => setTab("logs")}
-            className={`px-3 py-1 rounded ${tab === "logs" ? "bg-red-700 text-white" : "bg-gray-700 text-gray-300"}`}
+            className={`px-3 py-1 rounded ${
+              tab === "logs"
+                ? "bg-red-700 text-white"
+                : "bg-gray-700 text-gray-300"
+            }`}
           >
             <FaHistory className="inline mr-1" /> Logs
           </button>
@@ -279,7 +333,9 @@ useEffect(() => {
 
             {/* Panel tạo key */}
             <div className="bg-[#181818] border border-[#333] rounded-xl p-4 mb-8">
-              <h2 className="text-lg text-red-500 font-semibold mb-3">➕ Tạo License mới</h2>
+              <h2 className="text-lg text-red-500 font-semibold mb-3">
+                ➕ Tạo License mới
+              </h2>
               <div className="grid md:grid-cols-4 gap-2 items-center">
                 <input
                   value={newKey}
@@ -288,7 +344,7 @@ useEffect(() => {
                   className="bg-[#222] border border-[#333] p-2 rounded"
                 />
                 <button
-                  onClick={generateKey}
+                  onClick={() => setNewKey(generateLicenseKey())}
                   className="bg-gray-700 hover:bg-gray-800 px-3 py-2 rounded text-sm"
                 >
                   Sinh Key
@@ -338,14 +394,23 @@ useEffect(() => {
             </div>
 
             {/* Biểu đồ */}
-            <h2 className="text-gray-300 text-lg mb-2 font-semibold">📈 Thống kê tổng quan ({licenses.length})</h2>
+            <h2 className="text-gray-300 text-lg mb-2 font-semibold">
+              📈 Thống kê tổng quan ({licenses.length})
+            </h2>
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#333" />
                 <XAxis dataKey="name" stroke="#aaa" />
                 <YAxis stroke="#aaa" />
-                <Tooltip contentStyle={{ backgroundColor: "#222", border: "1px solid #444" }} />
-                <Bar dataKey="value" fill="#ef4444" barSize={50} radius={[6, 6, 0, 0]} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "#222", border: "1px solid #444" }}
+                />
+                <Bar
+                  dataKey="value"
+                  fill="#ef4444"
+                  barSize={50}
+                  radius={[6, 6, 0, 0]}
+                />
               </BarChart>
             </ResponsiveContainer>
 
@@ -374,21 +439,44 @@ useEffect(() => {
                 </thead>
                 <tbody>
                   {filteredLicenses.map((l) => {
-                    const isExp = expired.some((e) => e.license_key === l.license_key);
-                    const isSoon = expSoon.some((e) => e.license_key === l.license_key);
-                    const color = isExp ? "text-red-400" : isSoon ? "text-yellow-400" : "text-green-400";
+                    const isExp = expired.some(
+                      (e) => e.license_key === l.license_key
+                    );
+                    const isSoon = expSoon.some(
+                      (e) => e.license_key === l.license_key
+                    );
+                    const color = isExp
+                      ? "text-red-400"
+                      : isSoon
+                      ? "text-yellow-400"
+                      : "text-green-400";
                     return (
-                      <tr key={l.id} className="border-b border-[#222] hover:bg-[#1f1f1f]">
+                      <tr
+                        key={l.id}
+                        className="border-b border-[#222] hover:bg-[#1f1f1f]"
+                      >
                         <td className="py-2">{l.license_key}</td>
-                        <td>{l.dai_ly || "—"}</td>
+                        <td>{l.dai_ly_id || "—"}</td>
                         <td>{l.email || "—"}</td>
                         <td className={color}>
-                          {isExp ? "Hết hạn" : isSoon ? "Sắp hết hạn" : l.is_used ? "Đã dùng" : "Chưa dùng"}
+                          {isExp
+                            ? "Hết hạn"
+                            : isSoon
+                            ? "Sắp hết hạn"
+                            : l.is_used
+                            ? "Đã dùng"
+                            : "Chưa dùng"}
                         </td>
-                        <td>{l.expires_at ? new Date(l.expires_at).toLocaleDateString() : "—"}</td>
+                        <td>
+                          {l.expires_at
+                            ? new Date(l.expires_at).toLocaleDateString()
+                            : "—"}
+                        </td>
                         <td className="flex gap-2 text-xs">
                           <button
-                            onClick={() => extendLicense(l.id, l.license_key)}
+                            onClick={() =>
+                              extendLicense(l.id, l.license_key)
+                            }
                             className="bg-gray-700 hover:bg-gray-800 px-3 py-1 rounded flex items-center gap-1"
                           >
                             <FaClock /> +30d
@@ -425,7 +513,10 @@ useEffect(() => {
               </thead>
               <tbody>
                 {logs.map((log) => (
-                  <tr key={log.id} className="border-b border-[#222] hover:bg-[#1f1f1f]">
+                  <tr
+                    key={log.id}
+                    className="border-b border-[#222] hover:bg-[#1f1f1f]"
+                  >
                     <td>{new Date(log.created_at).toLocaleString()}</td>
                     <td>{log.action}</td>
                     <td>{log.message}</td>
